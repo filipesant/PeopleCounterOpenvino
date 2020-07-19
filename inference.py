@@ -23,45 +23,64 @@
 """
 
 import os
-import sys
-import logging as log
 from openvino.inference_engine import IENetwork, IECore
-
 
 class Network:
     """
-    Load and configure inference plugins for the specified target devices 
+    Load and configure inference plugins for the specified target devices
     and performs synchronous and asynchronous modes for the specified infer requests.
     """
 
     def __init__(self):
-        ### TODO: Initialize any class variables desired ###
+        """
+        Initializing class variables
+        """
+        self.plugin = None
+        self.network = None
+        self.input_blob = None
+        self.output_blob = None
+        self.exec_network = None
+        self.infer_request = None
 
-    def load_model(self):
-        ### TODO: Load the model ###
-        ### TODO: Check for supported layers ###
-        ### TODO: Add any necessary extensions ###
-        ### TODO: Return the loaded inference plugin ###
-        ### Note: You may need to update the function parameters. ###
-        return
+    def load_model(self, model, device="CPU", cpu_extension=None):
+        """
+        Load the model
+        """
+        model_xml = model
+        model_bin = os.path.splitext(model_xml)[0] + ".bin"
+        self.plugin = IECore()
+
+        if cpu_extension and "CPU" in device:
+            self.plugin.add_extension(cpu_extension, device)
+
+        self.network = IENetwork(model=model_xml, weights=model_bin)
+        self.exec_network = self.plugin.load_network(self.network, device)
+        self.input_blob = next(iter(self.network.inputs))
+        self.output_blob = next(iter(self.network.outputs))
+
+        return self.plugin
 
     def get_input_shape(self):
-        ### TODO: Return the shape of the input layer ###
-        return
+        """
+        Returning the shape of the input layer
+        """
+        return self.network.inputs[self.input_blob].shape
 
-    def exec_net(self):
-        ### TODO: Start an asynchronous request ###
-        ### TODO: Return any necessary information ###
-        ### Note: You may need to update the function parameters. ###
-        return
+    def exec_net(self, image):
+        """
+        Starting an asynchronous request
+        """
+        self.exec_network.start_async(request_id=0, inputs={self.input_blob: image})
 
     def wait(self):
-        ### TODO: Wait for the request to be complete. ###
-        ### TODO: Return any necessary information ###
-        ### Note: You may need to update the function parameters. ###
-        return
+        """
+        Waiting for the request to be complete
+        """
+        status = self.exec_network.requests[0].wait(-1)
+        return status
 
     def get_output(self):
-        ### TODO: Extract and return the output results
-        ### Note: You may need to update the function parameters. ###
-        return
+        """
+        Returning the output results
+        """
+        return self.exec_network.requests[0].outputs[self.output_blob]
