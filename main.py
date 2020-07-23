@@ -34,9 +34,6 @@ MQTT_HOST = IPADDRESS
 MQTT_PORT = 3001
 MQTT_KEEPALIVE_INTERVAL = 60
 
-CPU_EXTENSION = "/opt/intel/openvino/deployment_tools/" \
-                "inference_engine/lib/intel64/libcpu_extension_sse4.so"
-
 
 def build_argparser():
     """
@@ -62,7 +59,7 @@ def build_argparser():
                         "(0.5 by default)")
     return parser
 
-def draw_boxes(frame, result, width, height, prob_threshold):
+def draw_boxes(frame, result, width, height, prob_threshold, hist):
     """
     Method for drawing bounding boxes
     """
@@ -74,9 +71,16 @@ def draw_boxes(frame, result, width, height, prob_threshold):
             ymin = int(box[4] * height)
             xmax = int(box[5] * width)
             ymax = int(box[6] * height)
-            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
-            counter += 1
-    return frame, counter
+            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (255, 0, 0), 2)
+            counter = counter + 1
+
+    if counter > 0:
+        hist = 5
+    elif (counter == 0) and (hist > 0):
+        counter = 1
+        hist += -1
+
+    return frame, counter, hist
 
 def connect_mqtt():
     """
@@ -102,9 +106,12 @@ def infer_on_stream(args, client):
     start_time = time.time()
     total_count = 0
     last_count = 0
+    cur_request_id = 0
+    num_requests = 20
+    hist = -1
 
     ### Load the model through `infer_network` ###
-    infer_network.load_model(args.model, args.device, CPU_EXTENSION)
+    infer_network.load_model(args.model, args.device, num_requests, args.cpu_extension)
     net_input_shape = infer_network.get_input_shape()
 
     ### Handle the input stream ###
@@ -131,27 +138,25 @@ def infer_on_stream(args, client):
         infer_start = time.time()
 
         ### Starting asynchronous inference for specified request ###
-        infer_network.exec_net(p_frame)
+        infer_network.exec_net(cur_request_id, p_frame)
 
         ### Wait for the result ###
-        if infer_network.wait() == 0:
+        if infer_network.wait(cur_request_id) == 0:
             # Updating Detect time
             detect_time = time.time() - infer_start
 
             ### Getting the results of the inference request ###
-            result = infer_network.get_output()
+            result = infer_network.get_output(cur_request_id)
 
             ### Getting Inference Time
             infer_time = "Inference Time: {:.3f}ms".format(detect_time * 1000)
 
             ### Extract any desired stats from the results ###
             # Draw Bounding Boxes
-            frame, current_count = draw_boxes(frame, result, width, height, prob_threshold)
+            frame, current_count, hist = draw_boxes(frame, result, width, height, prob_threshold, hist)
 
             # Get a writen text on the video
-            cv2.putText(frame, "Counted Number: {} ".format(current_count),
-                        (20, 25), cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 1)
-            cv2.putText(frame, infer_time, (20, 50), cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 255, 0), 1)
+            cv2.putText(frame, infer_time, (20, 50), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 0), 1)
 
             ### Calculate and send relevant information on ###
             if current_count > last_count:
@@ -169,18 +174,21 @@ def infer_on_stream(args, client):
 
             client.publish("person", json.dumps({"count": current_count, "total": total_count}))
             last_count = current_count
-
-            if key_pressed == 27:
-                break
-
+            cur_request_id += 1
+            if cur_request_id == num_requests:
+                cur_request_id = 0
 
         ### Send the frame to the FFMPEG server ###
         sys.stdout.buffer.write(frame)
         sys.stdout.flush()
 
+        if key_pressed == 27:
+            break
+
         ### Write an output image if `single_image_mode` ###
         if single_image_mode:
             cv2.imwrite('output_image.jpg', frame)
+
 
     cap.release()
     cv2.destroyAllWindows()

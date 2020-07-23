@@ -42,19 +42,31 @@ class Network:
         self.exec_network = None
         self.infer_request = None
 
-    def load_model(self, model, device="CPU", cpu_extension=None):
+    def load_model(self, model, device, num_requests, cpu_extension=None, plugin=None):
         """
         Load the model
         """
         model_xml = model
         model_bin = os.path.splitext(model_xml)[0] + ".bin"
-        self.plugin = IECore()
+
+        if not plugin:
+            self.plugin = IECore()
+        else:
+            self.plugin = plugin
 
         if cpu_extension and "CPU" in device:
             self.plugin.add_extension(cpu_extension, device)
 
         self.network = IENetwork(model=model_xml, weights=model_bin)
-        self.exec_network = self.plugin.load_network(self.network, device)
+
+        supported_layers = self.plugin.query_network(network=self.network, device_name=device)
+        unsupported_layers = [l for l in self.network.layers.keys() if l not in supported_layers]
+        if len(unsupported_layers) != 0:
+            print("Unsupported layers found: {}".format(unsupported_layers))
+            print("Check whether extensions are available to add to IECore.")
+            exit(1)
+
+        self.exec_network = self.plugin.load_network(self.network, num_requests=num_requests, device_name=device)
         self.input_blob = next(iter(self.network.inputs))
         self.output_blob = next(iter(self.network.outputs))
 
@@ -66,21 +78,22 @@ class Network:
         """
         return self.network.inputs[self.input_blob].shape
 
-    def exec_net(self, image):
+    def exec_net(self, req_id, image):
         """
         Starting an asynchronous request
         """
-        self.exec_network.start_async(request_id=0, inputs={self.input_blob: image})
+        self.infer_request = self.exec_network.start_async(request_id=req_id, inputs={self.input_blob: image})
+        return self.exec_network
 
-    def wait(self):
+    def wait(self, req_id):
         """
         Waiting for the request to be complete
         """
-        status = self.exec_network.requests[0].wait(-1)
+        status = self.exec_network.requests[req_id].wait(-1)
         return status
 
-    def get_output(self):
+    def get_output(self, req_id):
         """
         Returning the output results
         """
-        return self.exec_network.requests[0].outputs[self.output_blob]
+        return self.exec_network.requests[req_id].outputs[self.output_blob]
