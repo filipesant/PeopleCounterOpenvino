@@ -24,6 +24,7 @@ import json
 from argparse import ArgumentParser
 from inference import Network
 import cv2
+import math
 import paho.mqtt.client as mqtt
 
 
@@ -59,11 +60,12 @@ def build_argparser():
                         "(0.5 by default)")
     return parser
 
-def draw_boxes(frame, result, width, height, prob_threshold, hist):
+def draw_boxes(frame, result, width, height, prob_threshold, hist, dist):
     """
     Method for drawing bounding boxes
     """
     counter = 0
+    distance = dist
     for box in result[0][0]:
         conf = box[2]
         if conf >= prob_threshold:
@@ -74,14 +76,25 @@ def draw_boxes(frame, result, width, height, prob_threshold, hist):
             cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (255, 0, 0), 2)
             counter = counter + 1
 
-    if counter > 0:
-        hist = 5
-    elif (counter == 0) and (hist > 0):
+            c_x = frame.shape[1]/2
+            c_y = frame.shape[0]/2
+            mid_x = (xmax + xmin)/2
+            mid_y = (ymax + ymin)/2
+
+            # Calculating distance
+            distance = math.sqrt(math.pow(mid_x - c_x, 2) +  math.pow(mid_y - c_y, 2) * 1.0)
+            hist = 0
+
+    if counter < 1:
+        hist += 1
+
+    if distance > 0 and hist < 50:
         counter = 1
-        hist += -1
+        hist += 1
+        if hist > 150:
+            hist = 0
 
-    return frame, counter, hist
-
+    return frame, counter, hist, distance
 def connect_mqtt():
     """
     Connect to the MQTT client
@@ -108,7 +121,9 @@ def infer_on_stream(args, client):
     last_count = 0
     cur_request_id = 0
     num_requests = 20
-    hist = -1
+    hist = 0
+    dist = 0
+    temp = 0
 
     ### Load the model through `infer_network` ###
     infer_network.load_model(args.model, args.device, num_requests, args.cpu_extension)
@@ -153,10 +168,10 @@ def infer_on_stream(args, client):
 
             ### Extract any desired stats from the results ###
             # Draw Bounding Boxes
-            frame, current_count, hist = draw_boxes(frame, result, width, height, prob_threshold, hist)
+            frame, current_count, hist, dist = draw_boxes(frame, result, width, height, prob_threshold, hist, temp)
 
             # Get a writen text on the video
-            cv2.putText(frame, infer_time, (20, 50), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 0), 1)
+            cv2.putText(frame, infer_time, (15, 50), cv2.FONT_HERSHEY_COMPLEX, 0.5, (255, 0, 0), 1)
 
             ### Calculate and send relevant information on ###
             if current_count > last_count:
@@ -174,6 +189,7 @@ def infer_on_stream(args, client):
 
             client.publish("person", json.dumps({"count": current_count, "total": total_count}))
             last_count = current_count
+            temp = dist
             cur_request_id += 1
             if cur_request_id == num_requests:
                 cur_request_id = 0
